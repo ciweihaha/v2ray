@@ -2,17 +2,27 @@
 ##
 
 # Set ARG
+# The VMess client UUID must come from the environment. Fail closed when unset:
+if [ -z "${VMESS_UUID:-}" ]; then
+    echo "Error: VMESS_UUID is not set; refusing to write a v2ray config without an explicit UUID" >&2
+    exit 1
+fi
+
 ARCH="64"
 DOWNLOAD_PATH="/tmp/v2ray"
 
 mkdir -p ${DOWNLOAD_PATH}
 cd ${DOWNLOAD_PATH} || exit
 
-TAG=$(wget --no-check-certificate -qO- https://api.github.com/repos/v2fly/v2ray-core/releases/latest | grep 'tag_name' | cut -d\" -f4)
-if [ -z "${TAG}" ]; then
-    echo "Error: Get v2ray latest version failed" && exit 1
-fi
-echo "The v2ray latest version: ${TAG}"
+# Pin the upstream release instead of following the moving "latest" alias on every run.
+# Override with V2RAY_VERSION=<tag> when a different pinned release is needed.
+V2RAY_VERSION="${V2RAY_VERSION:-v5.53.0}"
+case "${V2RAY_VERSION}" in
+    v[0-9]*.*) ;;
+    *) echo "Error: V2RAY_VERSION must be a release tag like v5.53.0 (got: ${V2RAY_VERSION})" >&2 && exit 1 ;;
+esac
+TAG="${V2RAY_VERSION}"
+echo "The v2ray version: ${TAG}"
 
 # Download files
 V2RAY_FILE="v2ray-linux-${ARCH}.zip"
@@ -30,8 +40,16 @@ fi
 echo "Download binary file: ${V2RAY_FILE} ${DGST_FILE} completed"
 
 # Check SHA512
-LOCAL=$(openssl dgst -sha512 v2ray.zip | sed 's/([^)]*)//g')
-STR=$(cat < v2ray.zip.dgst | grep 'SHA512' | head -n1)
+# Compare hex digests only: openssl prints "SHA2-512(v2ray.zip)= <hex>" while the
+# .dgst file has lines like "SHA512 (v2ray-linux-64.zip) = <hex>"; comparing full
+# strings never matched, so the check always failed. (NOTE: this logic was not
+# exercised inside a container for this patch; verify on a real run before use.)
+LOCAL=$(openssl dgst -sha512 v2ray.zip | awk '{print $NF}')
+STR=$(grep -i '^SHA512' v2ray.zip.dgst | head -n1 | awk '{print $NF}')
+
+if [ -z "${LOCAL}" ] || [ -z "${STR}" ]; then
+    echo " Check failed: could not read SHA512 values" && exit 1
+fi
 
 if [ "${LOCAL}" = "${STR}" ]; then
     echo " Check passed" && rm -fv v2ray.zip.dgst
@@ -60,7 +78,7 @@ cat <<EOF >/etc/v2ray/config.json
             "settings": {
                 "clients": [
                     {
-                        "id": "5b047452-d2fc-81da-c0db-6ef5d1c4435a",
+                        "id": "${VMESS_UUID}",
                         "alterId": 0
                     }
                 ],
@@ -87,7 +105,7 @@ echo "Install done"
 echo "--------------------------------"
 echo "Fly App Name: ${FLY_APP_NAME}"
 echo "Fly App Region: ${FLY_REGION}"
-echo "V2Ray UUID: ${UUID}"
+echo "V2Ray UUID: <from VMESS_UUID env; not printed>"
 echo "--------------------------------"
 
 # Run v2ray
