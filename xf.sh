@@ -2,6 +2,12 @@
 ##
 
 # Set ARG
+# The VMess client UUID must come from the environment. Fail closed when unset:
+if [ -z "${VMESS_UUID:-}" ]; then
+    echo "Error: VMESS_UUID is not set; refusing to write a v2ray config without an explicit UUID" >&2
+    exit 1
+fi
+
 ARCH="64"
 DOWNLOAD_PATH="/tmp/v2ray"
 
@@ -60,7 +66,7 @@ cat <<EOF >/etc/v2ray/config.json
             "settings": {
                 "clients": [
                     {
-                        "id": "5b047452-d2fc-81da-c0db-6ef5d1c4435a",
+                        "id": "${VMESS_UUID}",
                         "alterId": 0
                     }
                 ],
@@ -87,7 +93,7 @@ echo "Install done"
 echo "--------------------------------"
 echo "Fly App Name: ${FLY_APP_NAME}"
 echo "Fly App Region: ${FLY_REGION}"
-echo "V2Ray UUID: ${UUID}"
+echo "V2Ray UUID: <from VMESS_UUID env; not printed>"
 echo "--------------------------------"
 
 # Run v2ray
