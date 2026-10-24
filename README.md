@@ -1,0 +1,44 @@
+# v2ray-deploy
+
+V2Ray 服务端一键部署脚本（`xf.sh`）：在 Linux 主机或 Alpine 容器内安装 V2Ray 并写入 VMess + WebSocket 配置。
+
+## 特性
+
+- **固定版本安装**：默认 `v5.53.0`，可用 `V2RAY_VERSION` 覆盖，SHA512 校验通过才落盘
+- **失败回滚**：安装前自动备份，任何步骤失败自动恢复原状（`trap EXIT`）
+- **fail-closed**：`VMESS_UUID` 未设置时拒绝写入配置并退出，UUID 不会打印到日志
+- **路径可覆盖**：`V2RAY_BIN_DIR` / `V2RAY_SHARE_DIR` / `V2RAY_CONFIG_FILE`，便于演练与 CI
+- **仅安装不启动**：`V2RAY_SKIP_RUN=1`
+
+## 用法
+
+```bash
+VMESS_UUID=<your-uuid> sh xf.sh
+```
+
+安装位置：
+
+| 文件 | 路径 |
+| --- | --- |
+| 二进制 | `/usr/bin/v2ray`、`/usr/bin/v2ctl` |
+| 地理数据 | `/usr/local/share/v2ray/{geosite,geoip}.dat` |
+| 配置 | `/etc/v2ray/config.json` |
+
+入站：`0.0.0.0:8080` VMess + WebSocket（alterId 0）；出站：`freedom`。
+
+## Docker
+
+```bash
+docker build -t v2ray-deploy .
+docker run -d -p 8080:8080 -e VMESS_UUID=<your-uuid> v2ray-deploy
+```
+
+基于 `alpine:latest`，镜像内自带 `openssl` / `ca-certificates` / `tzdata`。
+
+## Fly.io
+
+脚本支持 `FLY_APP_NAME` / `FLY_REGION` 环境变量，部署时通过 `VMESS_UUID` secret 注入节点 UUID。
+
+## License
+
+[MIT](LICENSE)
