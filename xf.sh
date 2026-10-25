@@ -8,6 +8,26 @@ if [ -z "${VMESS_UUID:-}" ]; then
     exit 1
 fi
 
+# The UUID must be the standard 8-4-4-4-12 hexadecimal form. This also
+# makes the heredoc interpolation below safe: only hex digits and hyphens
+# can reach the generated JSON, so no JSON escaping is needed. A
+# non-standard form (for example, without hyphens) is rejected; if such a
+# form is ever needed, it must be documented and explicitly allowed here.
+case "${VMESS_UUID}" in
+    ????????-????-????-????-????????????) ;;
+    *)
+        echo "Error: VMESS_UUID must be a UUID in 8-4-4-4-12 hexadecimal form" >&2
+        exit 1
+        ;;
+esac
+UUID_HEX=$(printf '%s' "${VMESS_UUID}" | tr -d '-')
+case "${UUID_HEX}" in
+    *[!0-9a-fA-F]*)
+        echo "Error: VMESS_UUID must be a UUID in 8-4-4-4-12 hexadecimal form" >&2
+        exit 1
+        ;;
+esac
+
 ARCH="64"
 
 # Install locations. The V2RAY_* overrides exist so the installer can be
@@ -53,6 +73,11 @@ rollback() {
 }
 
 cleanup() {
+    # The atomic config temporary file (if one was created) is part of the
+    # rollback/cleanup inventory: remove any leftover copy on every exit path.
+    if [ -n "${CONFIG_TMP:-}" ]; then
+        rm -f "${CONFIG_TMP}"
+    fi
     rm -rf "${DOWNLOAD_PATH}" "${BACKUP_DIR}"
 }
 
@@ -87,6 +112,9 @@ echo "The v2ray version: ${TAG}"
 V2RAY_FILE="v2ray-linux-${ARCH}.zip"
 DGST_FILE="v2ray-linux-${ARCH}.zip.dgst"
 DOWNLOAD_BASE="${V2RAY_DOWNLOAD_BASE:-https://github.com/v2fly/v2ray-core/releases/download/${TAG}}"
+if [ -n "${V2RAY_DOWNLOAD_BASE:-}" ]; then
+    echo "Warning: V2RAY_DOWNLOAD_BASE is overridden; downloads will come from ${DOWNLOAD_BASE}" >&2
+fi
 echo "Downloading binary file: ${V2RAY_FILE}"
 echo "Downloading binary file: ${DGST_FILE}"
 
@@ -125,6 +153,18 @@ fi
 
 # Prepare
 echo "Prepare to use"
+# Defence in depth before unpacking: refuse any entry that would escape the
+# download directory (an absolute path, or a parent-directory component).
+# The .dgst check above only guards against transport corruption: the
+# .dgst file comes from the same release as the zip, so it cannot prove
+# the release itself was not tampered with.
+if ! unzip -Z1 v2ray.zip >"${DOWNLOAD_PATH}/zip-entries.txt"; then
+    fail "failed to list v2ray.zip"
+fi
+if grep -Eq '(^|/)\.\.(/|$)|^/' "${DOWNLOAD_PATH}/zip-entries.txt"; then
+    echo "Error: v2ray.zip contains an entry with an absolute path or a parent-directory component; refusing to unpack" >&2
+    exit 1
+fi
 unzip -o v2ray.zip || fail "failed to unpack v2ray.zip"
 
 # Refuse to install an incomplete file set: nothing under the install
@@ -153,7 +193,15 @@ mv -f geosite.dat geoip.dat "${SHARE_DIR}/" || fail "failed to install v2ray dat
 # mv config.json /etc/v2ray/config.json
 
 # Set config file
-if ! cat >"${CONFIG_FILE}" <<EOF
+# Write to a temporary file in the same directory, flush it, then rename it
+# over the target. A normal failure still goes through the trap rollback
+# above; this only closes the hard-interruption window in which the trap
+# does not run and a direct write could leave a truncated config. The
+# temporary name carries $$ to avoid collisions between concurrent runs,
+# and cleanup() removes any leftover temporary file (it is part of the
+# rollback/cleanup inventory, alongside the backed-up config).
+CONFIG_TMP="${CONFIG_FILE}.tmp.$$"
+if ! cat >"${CONFIG_TMP}" <<EOF
 {
     "log": {
         "loglevel": "warning"
@@ -185,8 +233,14 @@ if ! cat >"${CONFIG_FILE}" <<EOF
 }
 EOF
 then
-    fail "failed to write ${CONFIG_FILE}"
+    rm -f "${CONFIG_TMP}"
+    fail "failed to write ${CONFIG_TMP}"
 fi
+sync || fail "failed to sync ${CONFIG_TMP}"
+mv -f "${CONFIG_TMP}" "${CONFIG_FILE}" || {
+    rm -f "${CONFIG_TMP}"
+    fail "failed to install ${CONFIG_FILE}"
+}
 
 echo "Install done"
 
