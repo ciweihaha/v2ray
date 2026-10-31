@@ -1,0 +1,17 @@
+# 依赖与 Actions 自动更新（GitHub 全账户审计修复 GH-D1）：
+# - docker：每周检查 Dockerfile 基础镜像（alpine 已钉 digest）更新
+# - github-actions：把已钉完整 SHA 的 docker/* Action 自动升到新版本
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore
