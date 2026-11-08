@@ -4,7 +4,7 @@ V2Ray 服务端一键部署脚本（`xf.sh`）：在 Linux 主机或 Alpine 容�
 
 ## 特性
 
-- **固定版本安装**：默认 `v5.53.0`，可用 `V2RAY_VERSION` 覆盖，SHA512 校验通过才落盘
+- **固定版本安装**：默认 `v5.56.0`，可用 `V2RAY_VERSION` 覆盖，SHA512 校验通过才落盘
 - **失败回滚**：安装前自动备份，任何步骤失败自动恢复原状（`trap EXIT`）
 - **fail-closed**：`VMESS_UUID` 未设置时拒绝写入配置并退出，UUID 不会打印到日志；已设置的 UUID 须为 8-4-4-4-12 十六进制格式
 - **路径可覆盖**：`V2RAY_BIN_DIR` / `V2RAY_SHARE_DIR` / `V2RAY_CONFIG_FILE`，便于演练与 CI

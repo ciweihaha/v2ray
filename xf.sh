@@ -100,10 +100,10 @@ cd "${DOWNLOAD_PATH}" || fail "cannot enter download directory ${DOWNLOAD_PATH}"
 
 # Pin the upstream release instead of following the moving "latest" alias on every run.
 # Override with V2RAY_VERSION=<tag> when a different pinned release is needed.
-V2RAY_VERSION="${V2RAY_VERSION:-v5.53.0}"
+V2RAY_VERSION="${V2RAY_VERSION:-v5.56.0}"
 case "${V2RAY_VERSION}" in
     v[0-9]*.*) ;;
-    *) echo "Error: V2RAY_VERSION must be a release tag like v5.53.0 (got: ${V2RAY_VERSION})" >&2 && exit 1 ;;
+    *) echo "Error: V2RAY_VERSION must be a release tag like v5.56.0 (got: ${V2RAY_VERSION})" >&2 && exit 1 ;;
 esac
 TAG="${V2RAY_VERSION}"
 echo "The v2ray version: ${TAG}"
