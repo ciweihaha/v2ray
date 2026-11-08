@@ -61,7 +61,7 @@ INSTALL_STARTED=0
 # failures here must not mask the original error (the trap never calls exit).
 rollback() {
     [ "${INSTALL_STARTED}" = "1" ] || return 0
-    for spec in "v2ray:${BIN_DIR}/v2ray" "v2ctl:${BIN_DIR}/v2ctl" "geosite.dat:${SHARE_DIR}/geosite.dat" "geoip.dat:${SHARE_DIR}/geoip.dat" "config.json:${CONFIG_FILE}"; do
+    for spec in "v2ray:${BIN_DIR}/v2ray" "geosite.dat:${SHARE_DIR}/geosite.dat" "geoip.dat:${SHARE_DIR}/geoip.dat" "config.json:${CONFIG_FILE}"; do
         name="${spec%%:*}"
         target="${spec#*:}"
         if [ -f "${BACKUP_DIR}/${name}" ]; then
@@ -135,11 +135,15 @@ fi
 echo "Download binary file: ${V2RAY_FILE} ${DGST_FILE} completed"
 
 # Check SHA512
-# Compare hex digests only: openssl prints "SHA2-512(v2ray.zip)= <hex>" while the
-# .dgst file has lines like "SHA512 (v2ray-linux-64.zip) = <hex>"; comparing full
-# strings never matched, so the check always failed.
-LOCAL=$(openssl dgst -sha512 v2ray.zip | awk '{print $NF}')
-STR=$(grep -i '^SHA512' v2ray.zip.dgst | head -n1 | awk '{print $NF}')
+# Compare hex digests only (lowercased: the two sources may differ in case).
+# openssl prints "SHA2-512(v2ray.zip)= <hex>". The .dgst file lists one
+# "KEY= <hex>" line per digest; the SHA-512 line is "SHA2-512= <hex>"
+# (older releases used "SHA512 (v2ray-linux-64.zip) = <hex>"). Match the
+# key loosely so either form works, and take the first match. The previous
+# pattern (^SHA512) matched neither form, so STR was always empty and the
+# check always failed. Comparing full strings never matched either.
+LOCAL=$(openssl dgst -sha512 v2ray.zip | awk '{print $NF}' | tr '[:upper:]' '[:lower:]')
+STR=$(grep -iE '^SHA2?-?512[ (=]' v2ray.zip.dgst | head -n1 | awk '{print $NF}' | tr '[:upper:]' '[:lower:]')
 
 if [ -z "${LOCAL}" ] || [ -z "${STR}" ]; then
     echo " Check failed: could not read SHA512 values" && exit 1
@@ -148,7 +152,7 @@ fi
 if [ "${LOCAL}" = "${STR}" ]; then
     echo " Check passed" && rm -fv v2ray.zip.dgst
 else
-    echo " Check have not passed yet " && exit 1
+    echo " Check failed: SHA512 mismatch for v2ray.zip" && exit 1
 fi
 
 # Prepare
@@ -169,17 +173,19 @@ unzip -o v2ray.zip || fail "failed to unpack v2ray.zip"
 
 # Refuse to install an incomplete file set: nothing under the install
 # locations may change until every expected file is present.
-for f in v2ray v2ctl geosite.dat geoip.dat; do
+# Upstream no longer ships v2ctl (removed in v2ray-core 5.x; neither the
+# v5.53.0 nor the v5.56.0 archive contains it), so it is not required here.
+for f in v2ray geosite.dat geoip.dat; do
     [ -f "${f}" ] || fail "downloaded archive is missing ${f}; refusing to install an incomplete file set"
 done
-chmod +x v2ray v2ctl || fail "failed to make v2ray binaries executable"
+chmod +x v2ray || fail "failed to make v2ray executable"
 
 mkdir -p "${BIN_DIR}" "${SHARE_DIR}" || fail "failed to prepare install directories"
 CONFIG_DIR=$(dirname "${CONFIG_FILE}")
 mkdir -p "${CONFIG_DIR}" || fail "failed to prepare config directory ${CONFIG_DIR}"
 
 # Back up everything this run may replace, before replacing anything.
-for spec in "v2ray:${BIN_DIR}/v2ray" "v2ctl:${BIN_DIR}/v2ctl" "geosite.dat:${SHARE_DIR}/geosite.dat" "geoip.dat:${SHARE_DIR}/geoip.dat" "config.json:${CONFIG_FILE}"; do
+for spec in "v2ray:${BIN_DIR}/v2ray" "geosite.dat:${SHARE_DIR}/geosite.dat" "geoip.dat:${SHARE_DIR}/geoip.dat" "config.json:${CONFIG_FILE}"; do
     name="${spec%%:*}"
     target="${spec#*:}"
     if [ -f "${target}" ]; then
@@ -188,7 +194,7 @@ for spec in "v2ray:${BIN_DIR}/v2ray" "v2ctl:${BIN_DIR}/v2ctl" "geosite.dat:${SHA
 done
 INSTALL_STARTED=1
 
-mv -f v2ray v2ctl "${BIN_DIR}/" || fail "failed to install v2ray binaries to ${BIN_DIR}"
+mv -f v2ray "${BIN_DIR}/" || fail "failed to install v2ray binary to ${BIN_DIR}"
 mv -f geosite.dat geoip.dat "${SHARE_DIR}/" || fail "failed to install v2ray data files to ${SHARE_DIR}"
 # mv config.json /etc/v2ray/config.json
 

@@ -20,7 +20,7 @@ VMESS_UUID=<your-uuid> sh xf.sh
 
 | 文件 | 路径 |
 | --- | --- |
-| 二进制 | `/usr/bin/v2ray`、`/usr/bin/v2ctl` |
+| 二进制 | `/usr/bin/v2ray` |
 | 地理数据 | `/usr/local/share/v2ray/{geosite,geoip}.dat` |
 | 配置 | `/etc/v2ray/config.json` |
 
