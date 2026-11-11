@@ -5,6 +5,9 @@ V2Ray 服务端一键部署脚本（`xf.sh`）：在 Linux 主机或 Alpine 容�
 ## 特性
 
 - **固定版本安装**：默认 `v5.56.0`，可用 `V2RAY_VERSION` 覆盖，SHA512 校验通过才落盘
+- **架构自动检测**：按 `uname -m` 选择上游对应包（x86_64、aarch64、armv7l、riscv64 等），可用 `V2RAY_ARCH` 覆盖；未知架构直接报错，不下载错架构的包
+- **下载限时**：每次下载总时长上限 300 秒（`V2RAY_DOWNLOAD_TIMEOUT` 覆盖，单位秒），连接停滞不再无限挂起
+- **依赖预检**：启动即检查 `wget` / `unzip` / `openssl` / `timeout` 是否可用，缺失时直接报错，不跑到一半才失败
 - **失败回滚**：安装前自动备份，任何步骤失败自动恢复原状（`trap EXIT`）
 - **fail-closed**：`VMESS_UUID` 未设置时拒绝写入配置并退出，UUID 不会打印到日志；已设置的 UUID 须为 8-4-4-4-12 十六进制格式
 - **路径可覆盖**：`V2RAY_BIN_DIR` / `V2RAY_SHARE_DIR` / `V2RAY_CONFIG_FILE`，便于演练与 CI
@@ -12,11 +15,34 @@ V2Ray 服务端一键部署脚本（`xf.sh`）：在 Linux 主机或 Alpine 容�
 
 ## 用法
 
+主机需预装 `wget`、`unzip`、`openssl`、`timeout`（Debian/Ubuntu 精简镜像可能缺 `unzip`，先 `apt-get install -y unzip`；Alpine 容器内由 BusyBox 提供 `wget`/`unzip`/`timeout`，`openssl` 已装进镜像）。
+
 ```bash
 VMESS_UUID=<your-uuid> sh xf.sh
 ```
 
-安装位置：
+## 环境变量
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `VMESS_UUID` | （必填） | VMess 客户端 UUID，须为 8-4-4-4-12 十六进制格式 |
+| `V2RAY_VERSION` | `v5.56.0` | 上游 release tag，只允许字母、数字、点、横线、下划线 |
+| `V2RAY_ARCH` | 自动检测 | 上游包后缀（`64`、`arm64-v8a`、`arm32-v7a` 等），或 `uname -m` 值 |
+| `V2RAY_DOWNLOAD_TIMEOUT` | `300` | 每次下载总时长上限（秒） |
+| `V2RAY_DOWNLOAD_BASE` | 上游 release 地址 | 下载源覆盖（演练用） |
+| `V2RAY_BIN_DIR` / `V2RAY_SHARE_DIR` / `V2RAY_CONFIG_FILE` | `/usr/bin` 等 | 安装路径覆盖（演练用） |
+| `V2RAY_SKIP_RUN=1` | — | 只安装不启动 v2ray |
+
+## 测试
+
+```bash
+bash tests/drill.sh          # 本地演练：假 release 安装、zip-slip 拒绝、输入校验、黑洞超时等
+BUSYBOX=/path/to/busybox bash tests/drill.sh   # 另测 BusyBox unzip 的列表与解压路径
+```
+
+CI 在每次 push/PR 跑 `shellcheck` 与 `tests/drill.sh`（见 `.github/workflows/docker-image.yml`）。
+
+## 安装位置
 
 | 文件 | 路径 |
 | --- | --- |
