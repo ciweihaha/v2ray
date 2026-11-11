@@ -45,7 +45,7 @@ case "${ARCH}" in
     armv5tel|armv5tejl) ARCH="arm32-v5" ;;
     loongarch64) ARCH="loong64" ;;
     riscv64) ARCH="riscv64" ;;
-    32|64|arm32-v5|arm32-v6|arm32-v7a|arm64-v8a|loong64|mips32|mips32le|mips64|mips64le|riscv64) ;;
+    32|64|arm32-v5|arm32-v6|arm32-v7a|arm64-v8a|loong64|mips32|mips32le|mips64|mips64le) ;;
     *)
         echo "Error: unsupported CPU architecture '${ARCH}' (uname -m reports '$(uname -m)'); set V2RAY_ARCH to an upstream suffix (64, 32, arm64-v8a, arm32-v7a, riscv64, ...)" >&2
         exit 1

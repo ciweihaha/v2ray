@@ -184,6 +184,8 @@ else
     # archive must not escape even if it passed the listing check: extract
     # it and assert nothing lands outside the target dir. This needs a
     # busybox that can write files; some sandboxes block that.
+    # "$1" must expand in the inner busybox sh, not in this shell.
+    # shellcheck disable=SC2016
     if "$BB" sh -c 'echo x > "$1"' _ "$WORK/bb-write-probe" 2>/dev/null && [ -s "$WORK/bb-write-probe" ]; then
         rm -rf "$WORK/bb-extract"; mkdir -p "$WORK/bb-extract"
         "$BB" unzip -o -q "$FIXROOT/slip/v2ray-linux-64.zip" -d "$WORK/bb-extract" 2>/dev/null
