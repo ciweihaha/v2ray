@@ -41,3 +41,20 @@ jobs:
           tags: |
             ciweihaha/v2
             ciweihaha/v2:${{ env.BUILD_DATE }}-${{ env.SHORT_SHA }}
+
+  # Static checks and drills for xf.sh. Runs on every push/PR, unlike the
+  # docker job it does not build or push an image.
+  shell:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install shellcheck, BusyBox and unzip
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck busybox-static unzip
+      - name: Run shellcheck
+        run: shellcheck xf.sh tests/drill.sh
+      - name: Run drills
+        run: bash tests/drill.sh
