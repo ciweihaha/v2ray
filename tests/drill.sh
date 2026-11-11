@@ -304,5 +304,30 @@ else
     bad "non-numeric V2RAY_DOWNLOAD_TIMEOUT was not rejected (rc=$rc)"; cat "$W9b/run.log" >&2
 fi
 
+# --- 10. missing helper is reported clearly, before anything else ------
+check_missing_tool() { # $1=tool to omit from PATH
+    local tool="$1"
+    local w="$WORK/missing-$tool" fakebin="$WORK/missing-$tool/fakebin"
+    mkdir -p "$fakebin" "$w/bin" "$w/share" "$w/etc"
+    for d in /usr/bin /bin; do
+        for f in "$d"/*; do
+            b="$(basename "$f")"
+            [ "$b" = "$tool" ] && continue
+            [ -e "$fakebin/$b" ] || ln -s "$f" "$fakebin/$b" 2>/dev/null
+        done
+    done
+    env -i PATH="$fakebin" HOME="$HOME" \
+        VMESS_UUID="11111111-2222-3333-4444-555555555555" \
+        sh "$XF" >"$w/run.log" 2>&1; local rc=$?
+    if [ "$rc" -ne 0 ] && grep -q "required command '$tool' is not installed" "$w/run.log"; then
+        ok "missing $tool is reported clearly before anything else"
+    else
+        bad "missing $tool was not reported clearly (rc=$rc)"; cat "$w/run.log" >&2
+    fi
+}
+check_missing_tool wget
+check_missing_tool unzip
+check_missing_tool timeout
+
 echo "drill: $PASS passed, $FAIL failed, $SKIP skipped"
 [ "$FAIL" -eq 0 ]

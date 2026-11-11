@@ -118,6 +118,16 @@ fail() {
     exit 1
 }
 
+# Fail fast with a clear error if a required helper is missing, instead
+# of failing mid-install with a confusing message from a download or
+# checksum step -- or, for timeout, running a download with no time
+# bound at all. (mktemp is already covered by the explicit checks above;
+# the remaining helpers -- awk, grep, tr, dirname, sync, cp, mv -- come
+# with the shell's core utilities on every supported host.)
+for cmd in wget unzip openssl timeout; do
+    command -v "${cmd}" >/dev/null 2>&1 || fail "required command '${cmd}' is not installed"
+done
+
 cd "${DOWNLOAD_PATH}" || fail "cannot enter download directory ${DOWNLOAD_PATH}"
 
 # Pin the upstream release instead of following the moving "latest" alias on every run.
