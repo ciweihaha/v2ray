@@ -23,10 +23,10 @@ trap cleanup EXIT
 # --- fixture builder: fake release dir with zip + correct .dgst ----------
 # The zip bytes are built in memory and written via stdout redirection
 # (works even where python file writes are restricted).
-make_fixture() { # $1=outdir $2=mode(normal|slip|slip-space|badsha)
-    local out="$1" mode="$2"
+make_fixture() { # $1=outdir $2=mode(normal|slip|slip-space|badsha|exec) $3=arch suffix (default 64)
+    local out="$1" mode="$2" arch="${3:-64}"
     mkdir -p "$out"
-    python3 - "$mode" <<'PY' > "$out/v2ray-linux-64.zip"
+    python3 - "$mode" <<'PY' > "$out/v2ray-linux-$arch.zip"
 import sys, zipfile, io
 mode = sys.argv[1]
 buf = io.BytesIO()
@@ -48,9 +48,9 @@ z.close()
 sys.stdout.buffer.write(buf.getvalue())
 PY
     local sha
-    sha="$(openssl dgst -sha512 "$out/v2ray-linux-64.zip" | awk '{print $NF}')"
+    sha="$(openssl dgst -sha512 "$out/v2ray-linux-$arch.zip" | awk '{print $NF}')"
     if [ "$mode" = "badsha" ]; then sha="00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"; fi
-    printf 'SHA2-512= %s\n' "$sha" > "$out/v2ray-linux-64.zip.dgst"
+    printf 'SHA2-512= %s\n' "$sha" > "$out/v2ray-linux-$arch.zip.dgst"
 }
 
 # --- local fixture server ------------------------------------------------
@@ -232,6 +232,41 @@ if [ -f "$W7/pids" ]; then
     fi
 else
     bad "fake v2ray never ran (rc=$rc)"; cat "$W7/run.log" >&2
+fi
+
+# --- 8. architecture detection --------------------------------------------
+# 8a. V2RAY_ARCH override fetches the matching upstream zip.
+make_fixture "$FIXROOT/arm64" normal arm64-v8a
+W8a="$WORK/case8a"
+run_xf arm64 "$W8a" V2RAY_ARCH=arm64-v8a; rc=$?
+if [ "$rc" -eq 0 ] && [ -x "$W8a/bin/v2ray" ]; then
+    ok "V2RAY_ARCH=arm64-v8a installs the arm64-v8a zip"
+else
+    bad "V2RAY_ARCH=arm64-v8a install failed (rc=$rc)"; cat "$W8a/run.log" >&2
+fi
+# 8b. Unknown architecture fails closed with a clear error.
+W8b="$WORK/case8b"
+run_xf normal "$W8b" V2RAY_ARCH=sparc64; rc=$?
+if [ "$rc" -ne 0 ] && grep -q "unsupported CPU architecture" "$W8b/run.log"; then
+    ok "unknown V2RAY_ARCH fails closed with a clear error"
+else
+    bad "unknown V2RAY_ARCH was not rejected (rc=$rc)"; cat "$W8b/run.log" >&2
+fi
+# 8c. uname -m detection: a fake uname reporting aarch64 (no override).
+W8c="$WORK/case8c"; mkdir -p "$W8c/bin" "$W8c/share" "$W8c/etc" "$W8c/fakebin"
+printf '#!/bin/sh\necho aarch64\n' > "$W8c/fakebin/uname"; chmod +x "$W8c/fakebin/uname"
+env -i PATH="$W8c/fakebin:/usr/bin:/bin" HOME="$HOME" \
+    VMESS_UUID="11111111-2222-3333-4444-555555555555" \
+    V2RAY_VERSION="v5.56.0" \
+    V2RAY_DOWNLOAD_BASE="http://127.0.0.1:$PORT/arm64" \
+    V2RAY_BIN_DIR="$W8c/bin" V2RAY_SHARE_DIR="$W8c/share" \
+    V2RAY_CONFIG_FILE="$W8c/etc/config.json" \
+    V2RAY_SKIP_RUN=1 TMPDIR="$W8c" \
+    sh "$XF" >"$W8c/run.log" 2>&1; rc=$?
+if [ "$rc" -eq 0 ] && [ -x "$W8c/bin/v2ray" ]; then
+    ok "uname -m aarch64 detects arm64-v8a and installs it"
+else
+    bad "uname -m detection failed (rc=$rc)"; cat "$W8c/run.log" >&2
 fi
 
 echo "drill: $PASS passed, $FAIL failed, $SKIP skipped"

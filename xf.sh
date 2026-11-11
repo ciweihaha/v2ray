@@ -28,7 +28,29 @@ case "${UUID_HEX}" in
         ;;
 esac
 
-ARCH="64"
+# CPU architecture: upstream ships one zip per CPU (v2ray-linux-64.zip for
+# x86_64, v2ray-linux-arm64-v8a.zip for aarch64, ...). Detect it from
+# uname -m instead of assuming 64-bit x86: on an ARM host the old code
+# downloaded the x86_64 zip and the binary then failed to execute.
+# V2RAY_ARCH overrides the detection; it accepts either a uname -m value
+# or an upstream suffix directly. Anything else fails closed with a
+# clear error instead of downloading a wrong-arch zip.
+ARCH="${V2RAY_ARCH:-$(uname -m)}"
+case "${ARCH}" in
+    x86_64|amd64) ARCH="64" ;;
+    i386|i686) ARCH="32" ;;
+    aarch64|arm64) ARCH="arm64-v8a" ;;
+    armv7l) ARCH="arm32-v7a" ;;
+    armv6l) ARCH="arm32-v6" ;;
+    armv5tel|armv5tejl) ARCH="arm32-v5" ;;
+    loongarch64) ARCH="loong64" ;;
+    riscv64) ARCH="riscv64" ;;
+    32|64|arm32-v5|arm32-v6|arm32-v7a|arm64-v8a|loong64|mips32|mips32le|mips64|mips64le|riscv64) ;;
+    *)
+        echo "Error: unsupported CPU architecture '${ARCH}' (uname -m reports '$(uname -m)'); set V2RAY_ARCH to an upstream suffix (64, 32, arm64-v8a, arm32-v7a, riscv64, ...)" >&2
+        exit 1
+        ;;
+esac
 
 # Install locations. The V2RAY_* overrides exist so the installer can be
 # exercised in isolation (drills, CI) without touching a live system;
