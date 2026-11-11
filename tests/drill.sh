@@ -32,7 +32,12 @@ mode = sys.argv[1]
 buf = io.BytesIO()
 z = zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED)
 for n in ("v2ray", "geosite.dat", "geoip.dat"):
-    z.writestr(n, "fake-" + n)
+    if mode == "exec" and n == "v2ray":
+        # A stand-in v2ray that records its own PID/PPID and exits with a
+        # chosen code, so the drill can prove exec replaced the shell.
+        z.writestr(n, "#!/bin/sh\necho \"$$ $PPID\" > \"${V2RAY_PID_FILE:-/dev/null}\"\nexit \"${V2RAY_FAKE_EXIT:-0}\"\n")
+    else:
+        z.writestr(n, "fake-" + n)
 if mode == "slip":
     z.writestr("../evil.sh", "echo pwned\n")
     z.writestr("/tmp/abs-evil.sh", "echo pwned\n")
@@ -193,6 +198,40 @@ else
     else
         skip "busybox cannot write files here; busybox extraction case skipped"
     fi
+fi
+
+# --- 7. v2ray replaces the shell (exec) ----------------------------------
+# xf.sh runs as PID 1 in the container; without exec, v2ray would be a
+# child of the PID 1 shell and never see docker stop's SIGTERM. With
+# exec, the fake v2ray's PID must equal the xf.sh process PID, and its
+# exit code must propagate as the script's exit code.
+make_fixture "$FIXROOT/exec" exec
+W7="$WORK/case7"; mkdir -p "$W7/bin" "$W7/share" "$W7/etc"
+env -i PATH="/usr/bin:/bin" HOME="$HOME" \
+    VMESS_UUID="11111111-2222-3333-4444-555555555555" \
+    V2RAY_VERSION="v5.56.0" \
+    V2RAY_DOWNLOAD_BASE="http://127.0.0.1:$PORT/exec" \
+    V2RAY_BIN_DIR="$W7/bin" V2RAY_SHARE_DIR="$W7/share" \
+    V2RAY_CONFIG_FILE="$W7/etc/config.json" \
+    V2RAY_PID_FILE="$W7/pids" V2RAY_FAKE_EXIT=42 \
+    TMPDIR="$W7" \
+    sh "$XF" >"$W7/run.log" 2>&1 &
+XF_PID=$!
+wait "$XF_PID"; rc=$?
+if [ -f "$W7/pids" ]; then
+    read -r vpid vppid < "$W7/pids"
+    if [ "$vpid" = "$XF_PID" ]; then
+        ok "v2ray execs in place of the shell (fake v2ray PID $vpid == xf.sh PID $XF_PID)"
+    else
+        bad "v2ray did not replace the shell (fake v2ray PID $vpid, PPID $vppid, xf.sh PID $XF_PID)"
+    fi
+    if [ "$rc" -eq 42 ]; then
+        ok "v2ray exit code propagates (42)"
+    else
+        bad "v2ray exit code did not propagate (got $rc, want 42)"
+    fi
+else
+    bad "fake v2ray never ran (rc=$rc)"; cat "$W7/run.log" >&2
 fi
 
 echo "drill: $PASS passed, $FAIL failed, $SKIP skipped"

@@ -278,7 +278,12 @@ echo "--------------------------------"
 trap - EXIT
 cleanup
 
-# Run v2ray (skipped by drills via V2RAY_SKIP_RUN=1)
+# Run v2ray (skipped by drills via V2RAY_SKIP_RUN=1). exec replaces this
+# shell: xf.sh runs as PID 1 in the container, and a PID 1 shell does not
+# forward signals to its children -- docker stop's SIGTERM would be
+# ignored until the stop timeout and the container then SIGKILLed, with
+# no graceful shutdown. After exec, v2ray itself is PID 1 and receives
+# signals directly; the exit code is v2ray's either way.
 if [ "${V2RAY_SKIP_RUN:-}" != "1" ]; then
-    "${BIN_DIR}/v2ray" -config "${CONFIG_FILE}"
+    exec "${BIN_DIR}/v2ray" -config "${CONFIG_FILE}"
 fi
