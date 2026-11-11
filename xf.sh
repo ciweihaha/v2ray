@@ -162,9 +162,25 @@ echo "Prepare to use"
 # The .dgst check above only guards against transport corruption: the
 # .dgst file comes from the same release as the zip, so it cannot prove
 # the release itself was not tampered with.
-if ! unzip -Z1 v2ray.zip >"${DOWNLOAD_PATH}/zip-entries.txt"; then
+# Entries are listed with `unzip -l`, not `unzip -Z1`: the Alpine image
+# (and any BusyBox-based host) only has the BusyBox unzip applet, which
+# has no -Z option -- `unzip -Z1` fails there with "unrecognized option:
+# Z", aborting the install after the download and checksum already
+# passed. `unzip -l` works on both BusyBox and Info-ZIP unzip with the
+# same four-column layout (Length Date Time Name); keep only lines whose
+# first field is a numeric length and take everything after the first
+# three fields, so names containing spaces survive intact. (BusyBox
+# lists names after its own strip_unsafe_prefix sanitising, and applies
+# the same sanitising on extraction; Info-ZIP lists raw names, which the
+# grep below catches.) The listing is written to a file first and then
+# parsed, so a failed unzip is still detected -- a pipe would report
+# awk's status instead, and POSIX sh has no pipefail.
+if ! unzip -l v2ray.zip >"${DOWNLOAD_PATH}/zip-list.txt"; then
     fail "failed to list v2ray.zip"
 fi
+awk '$1 ~ /^[0-9]+$/ && NF >= 4 { $1=""; $2=""; $3=""; sub(/^ +/, ""); print }' \
+    "${DOWNLOAD_PATH}/zip-list.txt" >"${DOWNLOAD_PATH}/zip-entries.txt" \
+    || fail "failed to parse v2ray.zip listing"
 if grep -Eq '(^|/)\.\.(/|$)|^/' "${DOWNLOAD_PATH}/zip-entries.txt"; then
     echo "Error: v2ray.zip contains an entry with an absolute path or a parent-directory component; refusing to unpack" >&2
     exit 1
