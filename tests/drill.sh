@@ -153,12 +153,8 @@ check_reject "non-hex UUID" VMESS_UUID="11111111-2222-3333-4444-55555555555z"
 check_reject "UUID without hyphens" VMESS_UUID="11111111222233334444555555555555"
 check_reject "short UUID" VMESS_UUID="11111111-2222-3333-4444"
 check_reject "non-release V2RAY_VERSION" V2RAY_VERSION="latest"
-# NOTE: a version with shell metacharacters (e.g. 'v1.2.3; rm -rf /') is
-# NOT asserted here: with V2RAY_DOWNLOAD_BASE overridden the version
-# never reaches a URL in this drill, so the install would succeed. In
-# real use the version only enters the default GitHub URL and a weird
-# version fails the download (fail-closed). Tightening the version
-# pattern itself is a separate hardening item, not this drill's job.
+check_reject "V2RAY_VERSION with shell metacharacters" V2RAY_VERSION='v1.2.3; rm -rf /'
+check_reject "V2RAY_VERSION with a slash" V2RAY_VERSION='v5.56.0/../../x'
 
 # --- 6. BusyBox unzip listing (Alpine image path) -------------------------
 BB="${BUSYBOX:-$(command -v busybox || true)}"

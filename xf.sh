@@ -127,6 +127,18 @@ case "${V2RAY_VERSION}" in
     v[0-9]*.*) ;;
     *) echo "Error: V2RAY_VERSION must be a release tag like v5.56.0 (got: ${V2RAY_VERSION})" >&2 && exit 1 ;;
 esac
+# A version goes into a download URL, so reject anything but letters,
+# digits, dots, hyphens and underscores: the shape check above only
+# requires a leading v, digits and a dot, so 'v1.2.3; rm -rf /' passed
+# validation and only failed later at the download, with a confusing
+# error. Quoting already prevents execution, but bad input should be
+# rejected here, with this message, not downstream.
+case "${V2RAY_VERSION}" in
+    *[!0-9A-Za-z._-]*)
+        echo "Error: V2RAY_VERSION must be a release tag like v5.56.0 (got: ${V2RAY_VERSION})" >&2
+        exit 1
+        ;;
+esac
 TAG="${V2RAY_VERSION}"
 echo "The v2ray version: ${TAG}"
 
