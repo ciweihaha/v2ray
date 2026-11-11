@@ -137,6 +137,22 @@ DOWNLOAD_BASE="${V2RAY_DOWNLOAD_BASE:-https://github.com/v2fly/v2ray-core/releas
 if [ -n "${V2RAY_DOWNLOAD_BASE:-}" ]; then
     echo "Warning: V2RAY_DOWNLOAD_BASE is overridden; downloads will come from ${DOWNLOAD_BASE}" >&2
 fi
+# Bound every download in time. Without a bound a stalled connection hangs
+# the deploy (and CI) until the job timeout: GNU wget retries a timed-out
+# download up to 20 times, and BusyBox wget has no read timeout at all by
+# default. -T 30 fails a stalled read fast on both (GNU and BusyBox wget
+# both accept -T); the timeout wrapper caps the total time per file,
+# including GNU wget's retries, on both (timeout is a coreutils utility
+# and a BusyBox applet). Override the cap with
+# V2RAY_DOWNLOAD_TIMEOUT=<seconds>; drills use a small value.
+case "${V2RAY_DOWNLOAD_TIMEOUT:-300}" in
+    *[!0-9]*)
+        echo "Error: V2RAY_DOWNLOAD_TIMEOUT must be a number of seconds" >&2
+        exit 1
+        ;;
+esac
+DOWNLOAD_TIMEOUT="${V2RAY_DOWNLOAD_TIMEOUT:-300}"
+
 echo "Downloading binary file: ${V2RAY_FILE}"
 echo "Downloading binary file: ${DGST_FILE}"
 
@@ -144,12 +160,12 @@ echo "Downloading binary file: ${DGST_FILE}"
 # tested $? once, so a failed first download was masked whenever the second
 # one succeeded. Output goes to a log that is shown only on failure, so a
 # failed download is visible instead of being discarded to /dev/null.
-if ! wget -O "${DOWNLOAD_PATH}/v2ray.zip" "${DOWNLOAD_BASE}/${V2RAY_FILE}" >"${DOWNLOAD_PATH}/wget-v2ray.log" 2>&1; then
+if ! timeout "${DOWNLOAD_TIMEOUT}" wget -T 30 -O "${DOWNLOAD_PATH}/v2ray.zip" "${DOWNLOAD_BASE}/${V2RAY_FILE}" >"${DOWNLOAD_PATH}/wget-v2ray.log" 2>&1; then
     echo "Error: Failed to download ${V2RAY_FILE} from ${DOWNLOAD_BASE}" >&2
     cat "${DOWNLOAD_PATH}/wget-v2ray.log" >&2
     exit 1
 fi
-if ! wget -O "${DOWNLOAD_PATH}/v2ray.zip.dgst" "${DOWNLOAD_BASE}/${DGST_FILE}" >"${DOWNLOAD_PATH}/wget-dgst.log" 2>&1; then
+if ! timeout "${DOWNLOAD_TIMEOUT}" wget -T 30 -O "${DOWNLOAD_PATH}/v2ray.zip.dgst" "${DOWNLOAD_BASE}/${DGST_FILE}" >"${DOWNLOAD_PATH}/wget-dgst.log" 2>&1; then
     echo "Error: Failed to download ${DGST_FILE} from ${DOWNLOAD_BASE}" >&2
     cat "${DOWNLOAD_PATH}/wget-dgst.log" >&2
     exit 1

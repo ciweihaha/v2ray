@@ -271,5 +271,42 @@ else
     bad "uname -m detection failed (rc=$rc)"; cat "$W8c/run.log" >&2
 fi
 
+# --- 9. stalled download is bounded in time ------------------------------
+# A server that accepts the connection and then never sends anything.
+# With V2RAY_DOWNLOAD_TIMEOUT=5 the run must fail in seconds, not hang
+# (GNU wget would otherwise retry a stalled download for minutes).
+BHPORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+python3 -c 'import socket,time,sys; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR,1); s.bind(("127.0.0.1",int(sys.argv[1]))); s.listen(5)
+while True:
+    c,_=s.accept(); time.sleep(120)' "$BHPORT" >/dev/null 2>&1 &
+BHSRV=$!
+sleep 1  # let the blackhole finish binding before wget connects
+W9="$WORK/case9"; mkdir -p "$W9/bin" "$W9/share" "$W9/etc"
+START="$(date +%s)"
+env -i PATH="/usr/bin:/bin" HOME="$HOME" \
+    VMESS_UUID="11111111-2222-3333-4444-555555555555" \
+    V2RAY_VERSION="v5.56.0" \
+    V2RAY_DOWNLOAD_BASE="http://127.0.0.1:$BHPORT" \
+    V2RAY_BIN_DIR="$W9/bin" V2RAY_SHARE_DIR="$W9/share" \
+    V2RAY_CONFIG_FILE="$W9/etc/config.json" \
+    V2RAY_SKIP_RUN=1 V2RAY_DOWNLOAD_TIMEOUT=5 TMPDIR="$W9" \
+    sh "$XF" >"$W9/run.log" 2>&1; rc=$?
+ELAPSED="$(( $(date +%s) - START ))"
+kill "$BHSRV" 2>/dev/null
+if [ "$rc" -ne 0 ] && grep -q "Failed to download" "$W9/run.log" \
+   && [ "$ELAPSED" -ge 3 ] && [ "$ELAPSED" -le 30 ]; then
+    ok "stalled download fails after the timeout instead of hanging (${ELAPSED}s)"
+else
+    bad "stalled download handling wrong (rc=$rc, ${ELAPSED}s)"; cat "$W9/run.log" >&2
+fi
+# A non-numeric timeout is rejected at validation, before any download.
+W9b="$WORK/case9b"
+run_xf normal "$W9b" V2RAY_DOWNLOAD_TIMEOUT="5m"; rc=$?
+if [ "$rc" -ne 0 ] && grep -q "V2RAY_DOWNLOAD_TIMEOUT must be a number" "$W9b/run.log"; then
+    ok "non-numeric V2RAY_DOWNLOAD_TIMEOUT rejected with a clear error"
+else
+    bad "non-numeric V2RAY_DOWNLOAD_TIMEOUT was not rejected (rc=$rc)"; cat "$W9b/run.log" >&2
+fi
+
 echo "drill: $PASS passed, $FAIL failed, $SKIP skipped"
 [ "$FAIL" -eq 0 ]
