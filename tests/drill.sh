@@ -329,5 +329,81 @@ check_missing_tool wget
 check_missing_tool unzip
 check_missing_tool timeout
 
+# --- 11. signal mid-install rolls back ------------------------------------
+# A slow `mv` wrapper stretches the install phase (after backups, so
+# INSTALL_STARTED=1 and the binary has already been replaced) into a
+# window the drill can signal. The wrapper is slow only on its first
+# call, so the rollback's own mv calls stay fast. The drill waits for
+# the flag file the wrapper touches, so the signal reliably lands
+# inside the install, not during the download.
+check_signal() { # $1=signal name $2=expected exit code
+    local sig="$1" want="$2"
+    local w="$WORK/sig-$sig"
+    mkdir -p "$w/bin" "$w/share" "$w/etc" "$w/fakebin"
+    printf 'OLD-BINARY' > "$w/bin/v2ray"
+    printf 'OLD-CONFIG' > "$w/etc/config.json"
+    # "$@" and "$SLOWMV_FLAG" must expand in the wrapper, not here.
+    # shellcheck disable=SC2016
+    printf '#!/bin/sh\nif [ -e "$SLOWMV_FLAG" ]; then exec /bin/mv "$@"; fi\ntouch "$SLOWMV_FLAG"\nsleep 10\nexec /bin/mv "$@"\n' > "$w/fakebin/mv"
+    chmod +x "$w/fakebin/mv"
+# xf.sh is launched through python, not with `&`: a non-interactive
+# shell starts background jobs with SIGINT ignored, and an ignored
+# signal cannot be trapped -- the INT case would be vacuous. python's
+# subprocess restores SIGINT to its default in the child, which is
+# what a real foreground run (or PID 1 in the container) looks like.
+    python3 - "$XF" "$w" "$PORT" >"$w/pid" 2>"$w/py.log" <<'PY' &
+import os, subprocess, sys, signal
+xf, w, port = sys.argv[1], sys.argv[2], sys.argv[3]
+# The launcher itself runs as a background job, so it inherits SIGINT
+# ignored -- and an ignored signal stays ignored across exec, which
+# would make the INT trap untestable. Reset it here so the child sh
+# starts with SIGINT at its default, as in a real foreground run.
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+env = {
+    "PATH": w + "/fakebin:/usr/bin:/bin",
+    "HOME": os.environ["HOME"],
+    "VMESS_UUID": "11111111-2222-3333-4444-555555555555",
+    "V2RAY_VERSION": "v5.56.0",
+    "V2RAY_DOWNLOAD_BASE": "http://127.0.0.1:" + port + "/normal",
+    "V2RAY_BIN_DIR": w + "/bin",
+    "V2RAY_SHARE_DIR": w + "/share",
+    "V2RAY_CONFIG_FILE": w + "/etc/config.json",
+    "V2RAY_SKIP_RUN": "1",
+    "TMPDIR": w,
+    "SLOWMV_FLAG": w + "/slowmv-started",
+}
+out = open(w + "/run.log", "wb")
+p = subprocess.Popen(["sh", xf], env=env, stdout=out, stderr=subprocess.STDOUT)
+print(p.pid, flush=True)
+sys.exit(p.wait())
+PY
+    local launcher=$!
+    local xpid=""
+    for _ in $(seq 1 100); do
+        [ -s "$w/pid" ] && xpid="$(cat "$w/pid")" && break
+        sleep 0.2
+    done
+    [ -n "$xpid" ] || { bad "signal $sig test: launcher never reported the xf.sh PID"; cat "$w/py.log" >&2; return; }
+    for _ in $(seq 1 100); do
+        [ -e "$w/slowmv-started" ] && break
+        sleep 0.2
+    done
+    if [ ! -e "$w/slowmv-started" ]; then
+        bad "signal $sig test never reached the install phase"; kill "$xpid" 2>/dev/null; return
+    fi
+    kill "-$sig" "$xpid"
+    wait "$launcher"; local rc=$?
+    if [ "$rc" -eq "$want" ] && [ "$(cat "$w/bin/v2ray")" = "OLD-BINARY" ] \
+       && [ "$(cat "$w/etc/config.json")" = "OLD-CONFIG" ] \
+       && [ -z "$(find "$w" -maxdepth 1 -name 'v2ray*' -o -maxdepth 1 -name 'v2ray-backup*' | head -n1)" ] \
+       && ! grep -q "Install done" "$w/run.log"; then
+        ok "SIG$sig mid-install rolls back, cleans up and exits $want"
+    else
+        bad "SIG$sig mid-install handling wrong (rc=$rc)"; cat "$w/run.log" >&2
+    fi
+}
+check_signal TERM 143
+check_signal INT 130
+
 echo "drill: $PASS passed, $FAIL failed, $SKIP skipped"
 [ "$FAIL" -eq 0 ]

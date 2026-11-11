@@ -104,14 +104,39 @@ cleanup() {
 }
 
 # On any non-zero exit, roll back before the temp dirs are removed.
+# EXITING guards against re-entry: a second signal arriving while a
+# rollback is already running must not run rollback twice (the second
+# run would find the backups already moved and delete the restored
+# files instead of restoring them).
+EXITING=0
 on_exit() {
     status=$?
+    [ "${EXITING}" = "1" ] && return 0
+    EXITING=1
     if [ "${status}" -ne 0 ]; then
         rollback
     fi
     cleanup
 }
+# If the run is interrupted mid-install (Ctrl-C, docker stop, terminal
+# hangup), roll back and clean up exactly as on any other failure
+# instead of leaving a half-installed v2ray behind: the EXIT trap alone
+# does not run when the shell is killed by a signal. The exit status
+# follows the 128+signal convention. The trap runs after the current
+# foreground command finishes, so a signal during a download is acted
+# on once that download ends; nothing has been installed yet at that
+# point, so the delayed rollback is still a no-op there.
+on_signal() {
+    [ "${EXITING}" = "1" ] && return 0
+    EXITING=1
+    rollback
+    cleanup
+    exit "$1"
+}
 trap on_exit EXIT
+trap 'on_signal 129' HUP
+trap 'on_signal 130' INT
+trap 'on_signal 143' TERM
 
 fail() {
     echo "Error: $*" >&2
@@ -332,10 +357,11 @@ echo "Fly App Region: ${FLY_REGION:-}"
 echo "V2Ray UUID: <from VMESS_UUID env; not printed>"
 echo "--------------------------------"
 
-# Install succeeded: the trap must not roll anything back afterwards, and the
+# Install succeeded: no trap must roll anything back afterwards, and the
 # temp dirs are no longer needed. A later v2ray runtime failure must not
-# uninstall what was just installed.
-trap - EXIT
+# uninstall what was just installed -- and neither must a later signal,
+# so all four traps go, not just EXIT.
+trap - EXIT HUP INT TERM
 cleanup
 
 # Run v2ray (skipped by drills via V2RAY_SKIP_RUN=1). exec replaces this
