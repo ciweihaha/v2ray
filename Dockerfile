@@ -1,7 +1,7 @@
 ##
-# Base image pinned by version and manifest digest (Docker Hub, alpine:3.24.4, pushed 2026-11-05).
+# Base image pinned by version and manifest digest (Docker Hub, alpine:3.24.4, pushed 2026-11-08).
 # Non-root evaluation: xf.sh installs to /usr/bin, /usr/local/share/v2ray and /etc/v2ray and runs v2ray from those system paths, so a non-root user would require changing the default install paths (V2RAY_* overrides) and runtime permissions. Root is therefore retained as a design choice, not changed here.
-FROM alpine:3.24.4@sha256:93b41ef40b1677fce8fcc64ff4af09daddfacf5040afde618bc46c1e2d1cc7d4
+FROM alpine:3.24.4@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 
 WORKDIR /root
 COPY xf.sh /root/xf.sh
