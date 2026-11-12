@@ -494,6 +494,9 @@ check_signal HUP 129
 
 # --- 12. container entrypoint writes config and execs v2ray ---------------
 W12="$WORK/case12"; mkdir -p "$W12/bin" "$W12/etc"
+# The $$, $PPID, $* and ${V2RAY_FAKE_EXIT:-0} below must stay literal
+# in the generated fake: they expand when the fake v2ray runs, not now.
+# shellcheck disable=SC2016
 printf '#!/bin/sh\necho "$$ $PPID" > "%s/pids"\necho "$*" > "%s/args"\nexit "${V2RAY_FAKE_EXIT:-0}"\n' "$W12" "$W12" > "$W12/bin/v2ray"
 chmod +x "$W12/bin/v2ray"
 env -i PATH="/usr/bin:/bin" HOME="$HOME" \
