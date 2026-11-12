@@ -17,7 +17,11 @@ ok()   { PASS=$((PASS+1)); echo "PASS: $*"; }
 bad()  { FAIL=$((FAIL+1)); echo "FAIL: $*" >&2; }
 skip() { SKIP=$((SKIP+1)); echo "SKIP: $*"; }
 
-cleanup() { [ -n "${SRV:-}" ] && kill "$SRV" 2>/dev/null; rm -rf "$WORK"; }
+cleanup() {
+    [ -n "${SRV:-}" ] && kill "$SRV" 2>/dev/null
+    [ -n "${BHSRV:-}" ] && kill "$BHSRV" 2>/dev/null
+    rm -rf "$WORK"
+}
 trap cleanup EXIT
 
 # --- fixture builder: fake release dir with zip + correct .dgst ----------
@@ -32,12 +36,22 @@ mode = sys.argv[1]
 buf = io.BytesIO()
 z = zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED)
 for n in ("v2ray", "geosite.dat", "geoip.dat"):
+    if mode == "symlink" and n == "v2ray":
+        continue  # added below as a symlink entry, not a regular file
     if mode == "exec" and n == "v2ray":
-        # A stand-in v2ray that records its own PID/PPID and exits with a
-        # chosen code, so the drill can prove exec replaced the shell.
-        z.writestr(n, "#!/bin/sh\necho \"$$ $PPID\" > \"${V2RAY_PID_FILE:-/dev/null}\"\nexit \"${V2RAY_FAKE_EXIT:-0}\"\n")
+        # A stand-in v2ray that records its own PID/PPID and arguments
+        # and exits with a chosen code, so the drill can prove exec
+        # replaced the shell and passed the right subcommand.
+        z.writestr(n, "#!/bin/sh\necho \"$$ $PPID\" > \"${V2RAY_PID_FILE:-/dev/null}\"\necho \"$*\" > \"${V2RAY_ARGS_FILE:-/dev/null}\"\nexit \"${V2RAY_FAKE_EXIT:-0}\"\n")
     else:
         z.writestr(n, "fake-" + n)
+if mode == "symlink":
+    # A symlink entry for `v2ray` pointing at a system path: xf.sh must
+    # refuse to install it instead of following the link.
+    zi = zipfile.ZipInfo("v2ray")
+    zi.create_system = 3  # Unix, so external_attr is honoured
+    zi.external_attr = (0o120777 << 16)
+    z.writestr(zi, "/bin/true")
 if mode == "slip":
     z.writestr("../evil.sh", "echo pwned\n")
     z.writestr("/tmp/abs-evil.sh", "echo pwned\n")
@@ -54,11 +68,25 @@ PY
 }
 
 # --- local fixture server ------------------------------------------------
-PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+# Bind-then-close port picking races with other processes: the chosen
+# port can be taken before the server binds. Start the server and
+# verify it is actually listening, retrying on a fresh port if the
+# bind lost the race.
+free_port() { python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'; }
+port_open() { python3 -c 'import socket,sys; s=socket.socket(); sys.exit(0 if s.connect_ex(("127.0.0.1",int(sys.argv[1])))==0 else 1)' "$1"; }
 FIXROOT="$WORK/fixtures"; mkdir -p "$FIXROOT"
-(cd "$FIXROOT" && exec python3 -m http.server "$PORT" >/dev/null 2>&1) &
-SRV=$!
-sleep 1
+SRV=""
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    PORT="$(free_port)"
+    (cd "$FIXROOT" && exec python3 -m http.server "$PORT" >/dev/null 2>&1) &
+    SRV=$!
+    sleep 0.5
+    if kill -0 "$SRV" 2>/dev/null && port_open "$PORT"; then
+        break
+    fi
+    kill "$SRV" 2>/dev/null; wait "$SRV" 2>/dev/null; SRV=""
+done
+[ -n "$SRV" ] || { echo "drill: failed to start fixture server" >&2; exit 1; }
 
 # --- run xf.sh with a clean env against one fixture ----------------------
 # $1=fixture dir $2=work subdir $3..=extra env assignments (VAR=val)
@@ -89,6 +117,11 @@ if python3 -c "import json; d=json.load(open('$W1/etc/config.json')); assert d['
     ok "installed config.json is valid JSON with the given UUID"
 else
     bad "installed config.json is invalid or has the wrong UUID"
+fi
+if [ "$(stat -c %a "$W1/etc/config.json")" = "600" ] && [ "$(stat -c %a "$W1/etc")" = "700" ]; then
+    ok "installed config.json is mode 600 and its directory is mode 700"
+else
+    bad "installed config permissions wrong (config=$(stat -c %a "$W1/etc/config.json" 2>/dev/null), dir=$(stat -c %a "$W1/etc" 2>/dev/null))"
 fi
 
 # --- 2. zip-slip refused, pre-existing install untouched ------------------
@@ -121,6 +154,16 @@ else
     bad "spaced traversal was not refused (rc=$rc)"; cat "$W3/run.log" >&2
 fi
 
+# --- 3b. symlink entries are refused --------------------------------------
+make_fixture "$FIXROOT/symlink" symlink
+W3b="$WORK/case3b"
+run_xf symlink "$W3b"; rc=$?
+if [ "$rc" -ne 0 ] && grep -q "symbolic link" "$W3b/run.log"; then
+    ok "archive with a symlinked v2ray binary is refused"
+else
+    bad "symlink archive was not refused (rc=$rc)"; cat "$W3b/run.log" >&2
+fi
+
 # --- 4. SHA mismatch refused, previous install rolled back ---------------
 make_fixture "$FIXROOT/badsha" badsha
 W4="$WORK/case4"
@@ -132,6 +175,17 @@ if [ "$rc" -ne 0 ] && grep -qi "SHA512 mismatch" "$W4/run.log" \
     ok "SHA512 mismatch aborts and keeps the previous binary"
 else
     bad "SHA mismatch handling wrong (rc=$rc)"; cat "$W4/run.log" >&2
+fi
+
+# --- 4b. pinned SHA512 is enforced when requested -------------------------
+# The fake zip's hash differs from the pinned v5.56.0 value, so forcing
+# the pinned check must reject it even though its .dgst matches.
+W4b="$WORK/case4b"
+run_xf normal "$W4b" V2RAY_ENFORCE_PINNED_HASH=1; rc=$?
+if [ "$rc" -ne 0 ] && grep -q "does not match the pinned" "$W4b/run.log"; then
+    ok "pinned SHA512 check rejects a zip whose hash differs from the pinned v5.56.0 value"
+else
+    bad "pinned SHA512 check did not reject the fake zip (rc=$rc)"; cat "$W4b/run.log" >&2
 fi
 
 # --- 5. input validation --------------------------------------------------
@@ -155,6 +209,7 @@ check_reject "short UUID" VMESS_UUID="11111111-2222-3333-4444"
 check_reject "non-release V2RAY_VERSION" V2RAY_VERSION="latest"
 check_reject "V2RAY_VERSION with shell metacharacters" V2RAY_VERSION='v1.2.3; rm -rf /'
 check_reject "V2RAY_VERSION with a slash" V2RAY_VERSION='v5.56.0/../../x'
+check_reject "oversized V2RAY_DOWNLOAD_TIMEOUT" V2RAY_DOWNLOAD_TIMEOUT=999999999
 
 # --- 6. BusyBox unzip listing (Alpine image path) -------------------------
 BB="${BUSYBOX:-$(command -v busybox || true)}"
@@ -211,7 +266,7 @@ env -i PATH="/usr/bin:/bin" HOME="$HOME" \
     V2RAY_DOWNLOAD_BASE="http://127.0.0.1:$PORT/exec" \
     V2RAY_BIN_DIR="$W7/bin" V2RAY_SHARE_DIR="$W7/share" \
     V2RAY_CONFIG_FILE="$W7/etc/config.json" \
-    V2RAY_PID_FILE="$W7/pids" V2RAY_FAKE_EXIT=42 \
+    V2RAY_PID_FILE="$W7/pids" V2RAY_ARGS_FILE="$W7/args" V2RAY_FAKE_EXIT=42 \
     TMPDIR="$W7" \
     sh "$XF" >"$W7/run.log" 2>&1 &
 XF_PID=$!
@@ -227,6 +282,13 @@ if [ -f "$W7/pids" ]; then
         ok "v2ray exit code propagates (42)"
     else
         bad "v2ray exit code did not propagate (got $rc, want 42)"
+    fi
+    # v2ray 5.x needs the `run` subcommand; bare `-config` is rejected
+    # with "flag provided but not defined: -config" (exit 2).
+    if [ -f "$W7/args" ] && [ "$(cat "$W7/args")" = "run -config $W7/etc/config.json" ]; then
+        ok "v2ray is started as 'run -config <config>' (v2ray 5.x subcommand form)"
+    else
+        bad "v2ray was started with the wrong arguments: $(cat "$W7/args" 2>/dev/null)"
     fi
 else
     bad "fake v2ray never ran (rc=$rc)"; cat "$W7/run.log" >&2
@@ -271,12 +333,22 @@ fi
 # A server that accepts the connection and then never sends anything.
 # With V2RAY_DOWNLOAD_TIMEOUT=5 the run must fail in seconds, not hang
 # (GNU wget would otherwise retry a stalled download for minutes).
-BHPORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
-python3 -c 'import socket,time,sys; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR,1); s.bind(("127.0.0.1",int(sys.argv[1]))); s.listen(5)
+BHSRV=""
+for _ in 1 2 3 4 5; do
+    BHPORT="$(free_port)"
+    python3 -c 'import socket,time,sys; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR,1); s.bind(("127.0.0.1",int(sys.argv[1]))); s.listen(5)
 while True:
     c,_=s.accept(); time.sleep(120)' "$BHPORT" >/dev/null 2>&1 &
-BHSRV=$!
-sleep 1  # let the blackhole finish binding before wget connects
+    BHSRV=$!
+    sleep 0.5
+    if kill -0 "$BHSRV" 2>/dev/null && port_open "$BHPORT"; then
+        break
+    fi
+    kill "$BHSRV" 2>/dev/null; wait "$BHSRV" 2>/dev/null; BHSRV=""
+done
+if [ -z "$BHSRV" ]; then
+    bad "could not start the blackhole server; stalled-download case skipped"
+else
 W9="$WORK/case9"; mkdir -p "$W9/bin" "$W9/share" "$W9/etc"
 START="$(date +%s)"
 env -i PATH="/usr/bin:/bin" HOME="$HOME" \
@@ -295,6 +367,7 @@ if [ "$rc" -ne 0 ] && grep -q "Failed to download" "$W9/run.log" \
 else
     bad "stalled download handling wrong (rc=$rc, ${ELAPSED}s)"; cat "$W9/run.log" >&2
 fi
+fi # blackhole server started
 # A non-numeric timeout is rejected at validation, before any download.
 W9b="$WORK/case9b"
 run_xf normal "$W9b" V2RAY_DOWNLOAD_TIMEOUT="5m"; rc=$?
@@ -340,6 +413,7 @@ check_missing_tool() { # $1=tool to omit from PATH
 check_missing_tool wget
 check_missing_tool unzip
 check_missing_tool timeout
+check_missing_tool openssl
 
 # --- 11. signal mid-install rolls back ------------------------------------
 # A slow `mv` wrapper stretches the install phase (after backups, so
@@ -416,6 +490,36 @@ PY
 }
 check_signal TERM 143
 check_signal INT 130
+check_signal HUP 129
+
+# --- 12. container entrypoint writes config and execs v2ray ---------------
+W12="$WORK/case12"; mkdir -p "$W12/bin" "$W12/etc"
+# The $$, $PPID, $* and ${V2RAY_FAKE_EXIT:-0} below must stay literal
+# in the generated fake: they expand when the fake v2ray runs, not now.
+# shellcheck disable=SC2016
+printf '#!/bin/sh\necho "$$ $PPID" > "%s/pids"\necho "$*" > "%s/args"\nexit "${V2RAY_FAKE_EXIT:-0}"\n' "$W12" "$W12" > "$W12/bin/v2ray"
+chmod +x "$W12/bin/v2ray"
+env -i PATH="/usr/bin:/bin" HOME="$HOME" \
+    VMESS_UUID="11111111-2222-3333-4444-555555555555" \
+    V2RAY_BIN_DIR="$W12/bin" V2RAY_CONFIG_FILE="$W12/etc/config.json" \
+    V2RAY_FAKE_EXIT=7 \
+    sh "$ROOT/entrypoint.sh" >"$W12/run.log" 2>&1 &
+EP_PID=$!
+wait "$EP_PID"; rc=$?
+if [ "$rc" -eq 7 ] && [ -f "$W12/pids" ] && [ "$(cut -d' ' -f1 "$W12/pids")" = "$EP_PID" ] \
+   && [ "$(stat -c %a "$W12/etc/config.json")" = "600" ] \
+   && [ -f "$W12/args" ] && [ "$(cat "$W12/args")" = "run -config $W12/etc/config.json" ] \
+   && python3 -c "import json; d=json.load(open('$W12/etc/config.json')); assert d['inbounds'][0]['settings']['clients'][0]['id']=='11111111-2222-3333-4444-555555555555'" 2>/dev/null; then
+    ok "entrypoint writes a mode-600 config with the UUID and execs 'v2ray run -config' in place (exit code propagates)"
+else
+    bad "entrypoint handling wrong (rc=$rc, args=$(cat "$W12/args" 2>/dev/null))"; cat "$W12/run.log" >&2
+fi
+env -i PATH="/usr/bin:/bin" sh "$ROOT/entrypoint.sh" >"$W12/nouuid.log" 2>&1; rc=$?
+if [ "$rc" -ne 0 ] && grep -q "VMESS_UUID is not set" "$W12/nouuid.log"; then
+    ok "entrypoint refuses to start without VMESS_UUID"
+else
+    bad "entrypoint without VMESS_UUID was not rejected (rc=$rc)"
+fi
 
 echo "drill: $PASS passed, $FAIL failed, $SKIP skipped"
 [ "$FAIL" -eq 0 ]
