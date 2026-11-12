@@ -303,6 +303,18 @@ if [ "$rc" -ne 0 ] && grep -q "V2RAY_DOWNLOAD_TIMEOUT must be a number" "$W9b/ru
 else
     bad "non-numeric V2RAY_DOWNLOAD_TIMEOUT was not rejected (rc=$rc)"; cat "$W9b/run.log" >&2
 fi
+# A zero timeout is rejected too: GNU timeout treats 0 as "no timeout",
+# so it would silently remove the bound instead of capping the download.
+# Reverse control: case 9 above proves a real bound (5) works.
+for zero in 0 00; do
+    W9c="$WORK/case9c-$zero"
+    run_xf normal "$W9c" V2RAY_DOWNLOAD_TIMEOUT="$zero"; rc=$?
+    if [ "$rc" -ne 0 ] && grep -q "V2RAY_DOWNLOAD_TIMEOUT must be at least 1 second" "$W9c/run.log"; then
+        ok "zero V2RAY_DOWNLOAD_TIMEOUT ($zero) rejected with a clear error"
+    else
+        bad "zero V2RAY_DOWNLOAD_TIMEOUT ($zero) was not rejected (rc=$rc)"; cat "$W9c/run.log" >&2
+    fi
+done
 
 # --- 10. missing helper is reported clearly, before anything else ------
 check_missing_tool() { # $1=tool to omit from PATH
