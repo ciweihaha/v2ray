@@ -192,9 +192,17 @@ fi
 # including GNU wget's retries, on both (timeout is a coreutils utility
 # and a BusyBox applet). Override the cap with
 # V2RAY_DOWNLOAD_TIMEOUT=<seconds>; drills use a small value.
+# Zero is rejected below: GNU timeout treats 0 as "no timeout", so a
+# zero cap would silently remove the bound this block promises.
 case "${V2RAY_DOWNLOAD_TIMEOUT:-300}" in
     *[!0-9]*)
         echo "Error: V2RAY_DOWNLOAD_TIMEOUT must be a number of seconds" >&2
+        exit 1
+        ;;
+    *[!0]*)
+        ;; # contains a non-zero digit: a real bound
+    *)
+        echo "Error: V2RAY_DOWNLOAD_TIMEOUT must be at least 1 second (0 disables the timeout)" >&2
         exit 1
         ;;
 esac
